@@ -1,0 +1,47 @@
+name: Build Offline AI
+on:
+  workflow_dispatch:
+    inputs:
+      model_url:
+        description: GGUF model URL
+        default: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build launcher exe
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name OfflineAI launcher.py
+
+      - name: Download llama.cpp (CPU build)
+        shell: pwsh
+        run: |
+          $rel = Invoke-RestMethod https://api.github.com/repos/ggml-org/llama.cpp/releases/latest
+          $asset = $rel.assets | Where-Object { $_.name -match 'bin-win-cpu-x64\.zip$' } | Select-Object -First 1
+          Invoke-WebRequest $asset.browser_download_url -OutFile llama.zip
+          Expand-Archive llama.zip -DestinationPath llama
+
+      - name: Download model
+        shell: pwsh
+        run: curl.exe -L "${{ github.event.inputs.model_url }}" -o model.gguf
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory OfflineAI | Out-Null
+          Copy-Item dist\OfflineAI.exe OfflineAI\
+          Copy-Item llama\* OfflineAI\ -Recurse
+          Copy-Item model.gguf OfflineAI\model.gguf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfflineAI-windows
+          path: OfflineAI
+          compression-level: 0
