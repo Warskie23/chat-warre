@@ -1,4 +1,5 @@
 name: Build Offline AI
+
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +12,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -22,23 +24,42 @@ jobs:
 
       - name: Download llama.cpp (CPU build)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $rel = Invoke-RestMethod https://api.github.com/repos/ggml-org/llama.cpp/releases/latest
-          $asset = $rel.assets | Where-Object { $_.name -match 'bin-win-cpu-x64\.zip$' } | Select-Object -First 1
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; "User-Agent" = "actions" }
+          $rel = Invoke-RestMethod https://api.github.com/repos/ggml-org/llama.cpp/releases/latest -Headers $headers
+          Write-Host "Release: $($rel.tag_name)"
+          $rel.assets | ForEach-Object { Write-Host $_.name }
+
+          $patterns = @('win-cpu-x64', 'win-avx2-x64', 'win-noavx-x64')
+          $asset = $null
+          foreach ($p in $patterns) {
+            $asset = $rel.assets | Where-Object { $_.name -like "*$p*.zip" -and $_.name -notlike "*cudart*" } | Select-Object -First 1
+            if ($asset) { break }
+          }
+          if (-not $asset) { throw "No matching Windows CPU asset found. See the list above." }
+
+          Write-Host "Using: $($asset.name)"
           Invoke-WebRequest $asset.browser_download_url -OutFile llama.zip
           Expand-Archive llama.zip -DestinationPath llama
 
       - name: Download model
         shell: pwsh
-        run: curl.exe -L "${{ github.event.inputs.model_url }}" -o model.gguf
+        run: curl.exe -L --fail "${{ github.event.inputs.model_url }}" -o model.gguf
 
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory OfflineAI | Out-Null
           Copy-Item dist\OfflineAI.exe OfflineAI\
-          Copy-Item llama\* OfflineAI\ -Recurse
+
+          $srv = Get-ChildItem llama -Recurse -Filter llama-server.exe | Select-Object -First 1
+          if (-not $srv) { throw "llama-server.exe not found in the download." }
+          Copy-Item "$($srv.DirectoryName)\*" OfflineAI\ -Recurse
+
           Copy-Item model.gguf OfflineAI\model.gguf
+          Get-ChildItem OfflineAI | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v4
         with:
