@@ -1,18 +1,53 @@
-import os, subprocess, sys, time, webbrowser
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+import webbrowser
 
-base = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+PORT = 8080
+
+if getattr(sys, "frozen", False):
+    base = os.path.dirname(sys.executable)
+else:
+    base = os.path.dirname(os.path.abspath(__file__))
+
 server = os.path.join(base, "llama-server.exe")
 model = os.path.join(base, "model.gguf")
 
-if not (os.path.exists(server) and os.path.exists(model)):
+if not os.path.exists(server) or not os.path.exists(model):
     input("llama-server.exe or model.gguf is missing. Press Enter to exit.")
     sys.exit(1)
 
-proc = subprocess.Popen([server, "-m", model, "-c", "2048", "-t", "4", "--port", "8080"], cwd=base)
-time.sleep(6)
-webbrowser.open("http://localhost:8080")
-print("Offline AI running at http://localhost:8080 - close this window to stop.")
+proc = subprocess.Popen(
+    [server, "-m", model, "-c", "2048", "-t", "4", "--port", str(PORT)],
+    cwd=base,
+)
+
+print("Loading model, please wait...")
+ready = False
+for _ in range(120):
+    if proc.poll() is not None:
+        input("The server stopped unexpectedly. Press Enter to exit.")
+        sys.exit(1)
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=2)
+        ready = True
+        break
+    except Exception:
+        time.sleep(1)
+
+if ready:
+    webbrowser.open(f"http://localhost:{PORT}")
+    print(f"Offline AI running at http://localhost:{PORT}")
+else:
+    print("Server is slow to start. Try opening the address manually.")
+
+print("Close this window to stop the AI.")
 try:
     proc.wait()
 except KeyboardInterrupt:
-    proc.terminate()
+    pass
+finally:
+    if proc.poll() is None:
+        proc.terminate()
