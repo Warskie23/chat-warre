@@ -1,68 +1,29 @@
-name: Build Offline AI
-
-on:
-  workflow_dispatch:
-    inputs:
-      model_url:
-        description: GGUF model URL
-        default: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
-
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build launcher exe
-        run: |
-          pip install pyinstaller
-          pyinstaller --onefile --name OfflineAI launcher.py
-
       - name: Download llama.cpp (CPU build)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; "User-Agent" = "actions" }
-          $rel = Invoke-RestMethod https://api.github.com/repos/ggml-org/llama.cpp/releases/latest -Headers $headers
-          Write-Host "Release: $($rel.tag_name)"
-          $rel.assets | ForEach-Object { Write-Host $_.name }
+          $releases = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30" -Headers $headers
 
           $patterns = @('win-cpu-x64', 'win-avx2-x64', 'win-noavx-x64')
           $asset = $null
-          foreach ($p in $patterns) {
-            $asset = $rel.assets | Where-Object { $_.name -like "*$p*.zip" -and $_.name -notlike "*cudart*" } | Select-Object -First 1
-            if ($asset) { break }
+          foreach ($rel in $releases) {
+            foreach ($p in $patterns) {
+              $asset = $rel.assets | Where-Object { $_.name -like "*$p*.zip" -and $_.name -notlike "*cudart*" } | Select-Object -First 1
+              if ($asset) { break }
+            }
+            if ($asset) { Write-Host "Release: $($rel.tag_name)"; break }
           }
-          if (-not $asset) { throw "No matching Windows CPU asset found. See the list above." }
+
+          if (-not $asset) {
+            $releases | Select-Object -First 5 | ForEach-Object {
+              Write-Host "== $($_.tag_name)"
+              $_.assets | ForEach-Object { Write-Host $_.name }
+            }
+            throw "No matching Windows CPU asset found. See the list above."
+          }
 
           Write-Host "Using: $($asset.name)"
           Invoke-WebRequest $asset.browser_download_url -OutFile llama.zip
           Expand-Archive llama.zip -DestinationPath llama
-
-      - name: Download model
-        shell: pwsh
-        run: curl.exe -L --fail "${{ github.event.inputs.model_url }}" -o model.gguf
-
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory OfflineAI | Out-Null
-          Copy-Item dist\OfflineAI.exe OfflineAI\
-
-          $srv = Get-ChildItem llama -Recurse -Filter llama-server.exe | Select-Object -First 1
-          if (-not $srv) { throw "llama-server.exe not found in the download." }
-          Copy-Item "$($srv.DirectoryName)\*" OfflineAI\ -Recurse
-
-          Copy-Item model.gguf OfflineAI\model.gguf
-          Get-ChildItem OfflineAI | Select-Object Name, Length
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OfflineAI-windows
-          path: OfflineAI
-          compression-level: 0
